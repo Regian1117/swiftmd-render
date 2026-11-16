@@ -113,7 +113,7 @@ const R_REF_SEARCH = build('reflink|nolink(?!\\()', 'g', [
 const R_BLOCK_SKIP = /\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!`)()(?<b>`+)[^`]+\k<b>(?!`)|<(?! )[^<>]*?>/g;
 const R_PUNCT_OUTSIDE_CODE = /(`+)(?:[^`]|[^`][\s\S]*?[^`])\1(?!`)|`+|\\([\p{P}\p{S}])/gu;
 const R_URL = /(?:mailto:[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])|xmpp:[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])(?:\/[A-Za-z0-9@.]+)?)|((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])/y;
-const R_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+$)|[?!.,:;*_'"~)]+(?!$))+/;
+const R_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
 const R_NUMREF = /&#(?:(\d{1,7})|[Xx]([A-Fa-f0-9]{1,6}));/;
 const R_NUMREF_OR_AMP = /&#(?:(\d{1,7})|[Xx]([A-Fa-f0-9]{1,6}));|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g;
 
@@ -1139,6 +1139,7 @@ function Mask(src) {
   this.src = src;
   this.masked = null;
   this.ast = -2; this.und = -2; this.del = -2;
+  this.runsA = null; this.runsU = null; this.riA = 0; this.riU = 0;
 }
 
 function computeMask(m) {
@@ -1334,53 +1335,142 @@ function cpLen(s) {
   return n;
 }
 
+// Code-point class used by the emphasis flanking rules: 0 whitespace, 1 punctuation or symbol, 2 other.
+// `*` runs treat `~` as "other", `_` runs treat it as punctuation (marked's two closer grammars differ there).
+const EC = new Uint8Array(128);
+(function () {
+  for (let c = 0; c < 128; c++) EC[c] = c === 32 || (c >= 9 && c <= 13) ? 0 : (CT[c] & F_PUNCT) ? 1 : 2;
+})();
+const R_ALT0_A = /[^_*]*?__[^_*]*?\*[^_*]*?(?=__)/uy;
+const R_ALT0_U = /[^_*]*?\*\*[^_*]*?_[^_*]*?(?=\*\*)/uy;
+
+function cpClassAt(t, i, ast) {
+  const c = t.charCodeAt(i);
+  if (c < 128) return c === 126 && ast ? 2 : EC[c];
+  if (isWS(c)) return 0;
+  if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
+    const d = t.charCodeAt(i + 1);
+    if (d >= 0xdc00 && d <= 0xdfff) return R_PUNCT_CLASS.test(t.slice(i, i + 2)) ? 1 : 2;
+  }
+  return R_PUNCT_CLASS.test(t[i]) ? 1 : 2;
+}
+
+// Every run of the delimiter `rc` (42 or 95) in the masked text that marked's closer grammar can match,
+// as flat quadruples: match start (incl. the character before the run), run start, run length, kind
+// (1 closer, 2 opener, 3 both), in text order. The grammar looks only at the characters either side of a
+// maximal run, so one pass classifies every run and later searches just walk this list.
+function buildRuns(t, rc, ast) {
+  const ch = rc === 42 ? '*' : '_';
+  const n = t.length;
+  const out = [];
+  let i = t.indexOf(ch);
+  while (i >= 0) {
+    let e = i + 1;
+    while (e < n && t.charCodeAt(e) === rc) e++;
+    if (i > 0) {
+      let w = 1, pc;
+      const c = t.charCodeAt(i - 1);
+      if (c < 128) pc = c === 126 && ast ? 2 : EC[c];
+      else if (c >= 0xdc00 && c <= 0xdfff && i >= 2 && (t.charCodeAt(i - 2) & 0xfc00) === 0xd800) {
+        w = 2;
+        pc = R_PUNCT_CLASS.test(t.slice(i - 2, i)) ? 1 : 2;
+      } else pc = isWS(c) ? 0 : R_PUNCT_CLASS.test(t[i - 1]) ? 1 : 2;
+      const nc = e < n ? cpClassAt(t, e, ast) : 0; // the end of the text acts like whitespace
+      let kd;
+      if (pc === 1) kd = nc === 1 ? 3 : nc === 2 ? 2 : 1;
+      else if (pc === 0) kd = nc === 0 ? 0 : 2;
+      else kd = nc === 2 ? (ast ? 3 : 0) : 1;
+      if (kd !== 0) out.push(i - w, i, e - i, kd);
+    }
+    i = t.indexOf(ch, e);
+  }
+  return out;
+}
+
 function tryEmStrong(src, pos, prev, mk) {
-  R_EM_L.lastIndex = pos;
-  let s = R_EM_L.exec(src);
-  if (s === null || (!s[1] && !s[2] && !s[3] && !s[4])) return null;
-  const r = s[0][0];
+  const c = src.charCodeAt(pos);
+  const sn = src.length;
+  let e = pos + 1;
+  while (e < sn && src.charCodeAt(e) === c) e++;
+  if (e >= sn) return null;
+  // the character after the run: punctuation (d), or another non-space character (g4, `_` only)
+  const fc = src.charCodeAt(e);
+  let d = '', g4 = false;
+  if (fc < 128) {
+    if (fc === 32 || (fc >= 9 && fc <= 13)) return null;
+    if ((CT[fc] & F_PUNCT) !== 0 && fc !== 126) d = src[e];
+    else g4 = c === 95;
+  } else {
+    if (isWS(fc)) return null;
+    let cp = src[e];
+    if (fc >= 0xd800 && fc <= 0xdbff && e + 1 < sn) {
+      const x = src.charCodeAt(e + 1);
+      if (x >= 0xdc00 && x <= 0xdfff) cp = src.slice(e, e + 2);
+    }
+    if (R_PUNCT_CLASS.test(cp)) d = cp; else g4 = c === 95;
+  }
+  const r = c === 42 ? '*' : '_';
+  const ast = c === 42;
   const o = prev === r;
-  if (mk.masked === null) computeMask(mk);
-  const t = mk.masked;
-  const i = pos;
-  let l = i;
-  while (l > 0 && t[l - 1] === r) l--;
-  const p = charBefore(t, l);
-  const h = p === '*' || p === '_' || isPunctuation(p);
-  let n = prev;
-  if (l < i) n = p;
-  const u = l < i ? h : isPunctuation(n);
-  if (s[4] && R_ALNUM_U.test(n)) return null;
-  const d = s[1] || s[3] || '';
+  const k = e - pos;
+  let t = null, l = pos, n = prev, u, p = '', h = false;
+  if (pos > 0 && src.charCodeAt(pos - 1) === c) {
+    // inside a run: its start, as the masked text sees it
+    if (mk.masked === null) computeMask(mk);
+    t = mk.masked;
+    while (l > 0 && t.charCodeAt(l - 1) === c) l--;
+  }
+  if (t !== null) {
+    p = charBefore(t, l);
+    h = p === '*' || p === '_' || isPunctuation(p);
+  }
+  if (l < pos) { n = p; u = h; } else u = isPunctuation(n);
+  if (g4 && R_ALNUM_U.test(n)) return null;
   if (!(!d || !n || u)) return null;
-  const k = cpLen(s[0]) - 1;
-  let m = k, f = 0;
-  const y = i - l + k;
-  const R = !!p.trim() && (!!d || (r === '*' && !h));
-  const A = r === '*' ? R_EM_R_AST : R_EM_R_UND;
-  let v;
-  if (r === '*') { if (mk.ast === -2) mk.ast = lastCloser(t, '*'); v = mk.ast; }
-  else { if (mk.und === -2) mk.und = lastCloser(t, '_'); v = mk.und; }
   const Q = pos + k;
+  if (src.lastIndexOf(r) < Q) return null; // masking never adds a delimiter
+  if (t === null) {
+    if (mk.masked === null) computeMask(mk);
+    t = mk.masked;
+    p = charBefore(t, l);
+    h = p === '*' || p === '_' || isPunctuation(p);
+  }
+  let v;
+  if (ast) { if (mk.ast === -2) mk.ast = lastCloser(t, '*'); v = mk.ast; }
+  else { if (mk.und === -2) mk.und = lastCloser(t, '_'); v = mk.und; }
   if (v < Q) return null;
-  const ts = t.slice(Q);
-  const ee = v - Q;
-  A.lastIndex = 0;
-  while ((s = A.exec(ts)) !== null && !(s.index > ee)) {
-    const g = s[1] || s[2] || s[3] || s[4] || s[5] || s[6];
-    if (!g) continue;
-    let b = g.length; // runs of ASCII delimiters
-    if (s[3] || s[4]) { m += b; continue; }
-    else if (s[5] || s[6] || R) {
-      if (o && (s[5] || s[6])) break;
+  const y = pos - l + k;
+  const R = !!p.trim() && (!!d || (r === '*' && !h));
+  // marked's closer grammar can also swallow a "__x*y__" (or "**x_y**") stretch right at the start
+  let skipTo = 0;
+  if (t.indexOf(ast ? '__' : '**', Q) >= 0) {
+    const re = ast ? R_ALT0_A : R_ALT0_U;
+    re.lastIndex = Q;
+    const mm = re.exec(t);
+    if (mm !== null) skipTo = Q + mm[0].length;
+  }
+  let runs, ri;
+  if (ast) { if (mk.runsA === null) mk.runsA = buildRuns(t, 42, true); runs = mk.runsA; ri = mk.riA; }
+  else { if (mk.runsU === null) mk.runsU = buildRuns(t, 95, false); runs = mk.runsU; ri = mk.riU; }
+  const rn = runs.length;
+  while (ri < rn && runs[ri] < Q) ri += 4;
+  if (ast) mk.riA = ri; else mk.riU = ri;
+  let m = k, f = 0;
+  for (; ri < rn; ri += 4) {
+    const ms = runs[ri];
+    if (ms > v) break;
+    if (ms < skipTo) continue;
+    const kd = runs[ri + 3];
+    let b = runs[ri + 2];
+    if (kd === 2) { m += b; continue; }
+    if (kd === 3 || R) {
+      if (o && kd === 3) break;
       if (y % 3 && !((y + b) % 3)) { f += b; continue; }
     }
     m -= b;
     if (m > 0) continue;
     b = Math.min(b, b + m + f);
-    const c0 = s[0].charCodeAt(0);
-    const te = c0 >= 0xd800 && c0 <= 0xdbff && s[0].length > 1 ? 2 : 1;
-    const len = k + s.index + te + b;
+    const len = runs[ri + 1] - pos + b;
     if (Math.min(k, b) % 2) {
       const inner = inlineTokens(src.slice(pos + 1, pos + len - 1));
       rLen = len;
