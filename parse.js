@@ -475,7 +475,13 @@ function Tok(type, raw, text) {
   this.a = null; // depth / lang / items / tokens / rows
   this.b = null; // ordered / header / checkbox
   this.c = null; // start / align
+  this.q = null; // inline queue entry
 }
+
+// marked lexes inline content after the block pass, in the order the block pass queued it
+let queue = [];
+function QEntry(src) { this.src = src; this.html = ''; }
+function enq(src) { const e = new QEntry(src); queue.push(e); return e; }
 
 function blockTokens(src, toks, clipped) {
   const n = src.length;
@@ -511,6 +517,7 @@ function blockTokens(src, toks, clipped) {
       if (last !== null && (last.type === T_PARA || last.type === T_TEXT)) {
         last.raw += (last.raw.endsWith('\n') ? '' : '\n') + t.raw;
         last.text += '\n' + t.text;
+        queue[queue.length - 1].src = last.text;
       } else toks.push(t);
       pos += t.raw.length;
       continue;
@@ -529,6 +536,7 @@ function blockTokens(src, toks, clipped) {
           if (last !== null && (last.type === T_PARA || last.type === T_TEXT)) {
             last.raw += (last.raw.endsWith('\n') ? '' : '\n') + d.raw;
             last.text += '\n' + d.raw;
+            queue[queue.length - 1].src = last.text;
           } else {
             if (links[d.text] === undefined) links[d.text] = d.a;
             toks.push(d);
@@ -566,7 +574,8 @@ function blockTokens(src, toks, clipped) {
       if (clipped && last !== null && last.type === T_PARA) {
         last.raw += (last.raw.endsWith('\n') ? '' : '\n') + raw;
         last.text += '\n' + raw;
-      } else toks.push(new Tok(T_PARA, raw, raw));
+        queue[queue.length - 1].src = last.text;
+      } else { const p = new Tok(T_PARA, raw, raw); p.q = enq(raw); toks.push(p); }
       clipped = false;
       pos = e;
       continue;
@@ -578,7 +587,8 @@ function blockTokens(src, toks, clipped) {
       if (last !== null && last.type === T_TEXT) {
         last.raw += (last.raw.endsWith('\n') ? '' : '\n') + raw;
         last.text += '\n' + raw;
-      } else toks.push(new Tok(T_TEXT, raw, raw));
+        queue[queue.length - 1].src = last.text;
+      } else { const p = new Tok(T_TEXT, raw, raw); p.q = enq(raw); toks.push(p); }
       pos = e;
     }
   }
@@ -690,6 +700,7 @@ function heading(src, pos, i) {
     if (!s || / $|\t$/.test(s)) text = s.trim();
   }
   const t = new Tok(T_HEADING, src.slice(pos, e), text);
+  t.q = enq(text);
   t.a = depth;
   return t;
 }
@@ -757,10 +768,10 @@ function table(src, pos) {
     else al.push(null);
   }
   const t = new Tok(T_TABLE, rtrimChar(m[0], '\n'), '');
-  t.b = header;
+  t.b = header.map(enq);
   t.c = al;
   const rr = [];
-  for (const r of rows) rr.push(splitCells(r, header.length));
+  for (const r of rows) rr.push(splitCells(r, header.length).map(enq));
   t.a = rr;
   return t;
 }
@@ -813,6 +824,7 @@ function lheading(src, pos) {
   const m = R_LHEADING.exec(pos === 0 ? src : src.slice(pos));
   if (m === null) return null;
   const t = new Tok(T_HEADING, rtrimChar(m[0], '\n'), m[1].trim());
+  t.q = enq(t.text);
   t.a = m[2].charCodeAt(0) === 61 ? 1 : 2;
   return t;
 }
@@ -1081,6 +1093,9 @@ function list(src, pos) {
       it.text = it.text.replace(R_TASK_REPL, '');
       d.raw = d.raw.replace(R_TASK_REPL, '');
       d.text = d.text.replace(R_TASK_REPL, '');
+      for (let g = queue.length - 1; g >= 0; g--) {
+        if (R_TASK.test(queue[g].src)) { queue[g].src = queue[g].src.replace(R_TASK_REPL, ''); break; }
+      }
       const km = /\[[ xX]\]/.exec(it.raw);
       if (km !== null) {
         const checked = km[0] !== '[ ]';
@@ -1106,13 +1121,13 @@ function renderBlocks(toks) {
     const t = toks[i];
     switch (t.type) {
       case T_PARA:
-        out += '<p>' + (t.b ? checkbox(t.b === 2) : '') + inlineTop(t.text) + '</p>\n';
+        out += '<p>' + (t.b ? checkbox(t.b === 2) : '') + t.q.html + '</p>\n';
         break;
       case T_TEXT:
-        out += (t.b ? checkbox(t.b === 2) : '') + inlineTop(t.text);
+        out += (t.b ? checkbox(t.b === 2) : '') + t.q.html;
         break;
       case T_HEADING:
-        out += '<h' + t.a + '>' + inlineTop(t.text) + '</h' + t.a + '>\n';
+        out += '<h' + t.a + '>' + t.q.html + '</h' + t.a + '>\n';
         break;
       case T_CODE: {
         const lang = t.a;
@@ -1134,14 +1149,14 @@ function renderBlocks(toks) {
       case T_TABLE: {
         out += '<table>\n<thead>\n<tr>\n';
         const al = t.c;
-        for (let k = 0; k < t.b.length; k++) out += (al[k] ? '<th align="' + al[k] + '">' : '<th>') + inlineTop(t.b[k]) + '</th>\n';
+        for (let k = 0; k < t.b.length; k++) out += (al[k] ? '<th align="' + al[k] + '">' : '<th>') + t.b[k].html + '</th>\n';
         out += '</tr>\n</thead>\n';
         const rows = t.a;
         if (rows.length) {
           let s = '';
           for (const r of rows) {
             s += '<tr>\n';
-            for (let k = 0; k < r.length; k++) s += (al[k] ? '<td align="' + al[k] + '">' : '<td>') + inlineTop(r[k]) + '</td>\n';
+            for (let k = 0; k < r.length; k++) s += (al[k] ? '<td align="' + al[k] + '">' : '<td>') + r[k].html + '</td>\n';
             s += '</tr>\n';
           }
           out += '<tbody>' + s + '</tbody>';
@@ -1163,10 +1178,6 @@ function checkbox(checked) {
 // ---------------------------------------------------------------------------------------------------
 // Inline lexer + renderer
 
-function inlineTop(src) {
-  inRaw = false;
-  return inlineTokens(src);
-}
 
 // per-call masked source state
 function Mask(src) {
@@ -1684,6 +1695,9 @@ export function parse(markdown) {
   links = Object.create(null);
   top = true;
   inLink = false; inRaw = false; linkEmitted = false; parenOk = true; textMode = false;
+  queue = [];
   const toks = blockTokens(src, [], false);
+  for (let i = 0; i < queue.length; i++) { const e = queue[i]; inRaw = false; e.html = inlineTokens(e.src); }
+  queue = null;
   return renderBlocks(toks);
 }
