@@ -191,6 +191,9 @@ function expandLeading(s, col) {
   let i = 0;
   while (i < s.length) { const c = s.charCodeAt(i); if (c === 32 || c === 9) i++; else break; }
   if (i === 0) return s;
+  let t = 0;
+  while (t < i && s.charCodeAt(t) !== 9) t++;
+  if (t === i) return s;
   return expandTabs(s.slice(0, i), col) + s.slice(i);
 }
 function firstNonSpace(s) {
@@ -1007,15 +1010,22 @@ function list(src, pos) {
         const ue = eol(src, e);
         const U = src.slice(e, ue);
         const Z = expandLeading(U, 0);
-        if (fencesBeginL(U, ni) || headingBeginL(U, ni) || htmlBeginL(U, ni) || bqBeginL(U, ni) || bulletBeginL(U, ni) || hrL(U, ni)) break;
+        // only a line with at most ni leading spaces and a block-starting character can end the item
+        let ls = e;
+        while (ls < ue && src.charCodeAt(ls) === C_SP) ls++;
+        const fc = ls < ue ? src.charCodeAt(ls) : -1;
+        if (ls - e <= ni && (fc === 96 || fc === 126 || fc === 35 || fc === 60 || fc === 62 || fc === 42 || fc === 43 || fc === 45 || fc === 95 || (fc >= 48 && fc <= 57))) {
+          if (fencesBeginL(U, ni) || headingBeginL(U, ni) || htmlBeginL(U, ni) || bqBeginL(U, ni) || bulletBeginL(U, ni) || hrL(U, ni)) break;
+        }
+        const ub = fc === -1 || (fc > 32 && fc < 128) ? fc === -1 : !U.trim();
         const fns = firstNonSpace(Z);
-        if (fns >= R || !U.trim()) contents += '\n' + Z.slice(R);
+        if (fns >= R || ub) contents += '\n' + Z.slice(R);
         else {
           if (blank || firstNonSpace(mm.replace(/\t/g, '    ')) >= 4 || fencesBeginL(mm, ni) || headingBeginL(mm, ni) || htmlBeginL(mm, ni) || hrL(mm, ni)) break;
           const qe = /^ {0,3}(?:=+|-+) *$/.test(U) && R_LHEADING.test(mm + '\n' + U) ? '    ' + Z.replace(/^ {0,3}/, '') : U;
           contents += '\n' + qe;
         }
-        blank = !U.trim();
+        blank = ub;
         e = Math.min(n, ue + 1);
         mm = Z.slice(R);
       }
