@@ -412,6 +412,7 @@ function bulletEnd(s, i) {
 const T_SPACE = 0, T_CODE = 1, T_HEADING = 2, T_HR = 3, T_BQ = 4, T_LIST = 5, T_HTML = 6, T_DEF = 7, T_TABLE = 8, T_PARA = 9, T_TEXT = 10, T_CHECK = 11;
 
 let links = null; // label -> {href, title}
+let nLinks = 0;
 let top = true;
 let inLink = false, inRaw = false, linkEmitted = false, parenOk = true, textMode = false;
 
@@ -485,7 +486,7 @@ function blockTokens(src, toks, clipped) {
             last.text += '\n' + d.raw;
             queue[queue.length - 1].src = last.text;
           } else {
-            if (links[d.text] === undefined) links[d.text] = d.a;
+            if (links[d.text] === undefined) { links[d.text] = d.a; nLinks++; }
             toks.push(d);
           }
           pos += d.raw.length;
@@ -1145,8 +1146,10 @@ function Mask(src) {
 function computeMask(m) {
   let t = m.src;
   const hasBr = t.indexOf('[') >= 0, hasTick = t.indexOf('`') >= 0;
-  if (hasBr) t = t.replace(R_REF_SEARCH, refMaskRepl);
-  if (hasTick || t.indexOf('\\') >= 0) t = t.replace(R_PUNCT_OUTSIDE_CODE, punctMaskRepl);
+  // without definitions the first pass changes nothing; with neither a backslash nor a "``" the second
+  // pass changes nothing (a one-backtick span has no inner backtick to rewrite)
+  if (hasBr && nLinks > 0) t = t.replace(R_REF_SEARCH, refMaskRepl);
+  if (t.indexOf('\\') >= 0 || (hasTick && t.indexOf('``') >= 0)) t = t.replace(R_PUNCT_OUTSIDE_CODE, punctMaskRepl);
   if (hasBr || hasTick || t.indexOf('<') >= 0) t = t.replace(R_BLOCK_SKIP, skipMaskRepl);
   m.masked = t;
 }
@@ -1653,7 +1656,12 @@ function textEnd(sc, s) {
 
 const ESC_HTML = { 38: '&amp;', 60: '&lt;', 62: '&gt;', 34: '&quot;', 39: '&#39;' };
 
+// text with none of these can only be one plain text token (no escape, tag, link, emphasis, code span,
+// entity, autolink or hard break can start in it)
+const R_SPECIAL = /[\\<!\[`*~_&@:]|www\.|  \n/;
+
 function lexInline(src) {
+  if (!R_SPECIAL.test(src)) return inRaw || textMode ? src : esc(src);
   const n = src.length;
   let out = '';
   let pend = '', pendEsc = false, hasPend = false;
@@ -1787,6 +1795,7 @@ function onlyWsAfter(s, i) {
 export function parse(markdown) {
   const src = markdown.indexOf('\r') >= 0 ? markdown.replace(/\r\n|\r/g, '\n') : markdown;
   links = Object.create(null);
+  nLinks = 0;
   top = true;
   inLink = false; inRaw = false; linkEmitted = false; parenOk = true; textMode = false;
   queue = [];
