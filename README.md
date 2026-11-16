@@ -40,8 +40,8 @@ code is shipped here; marked is only read to learn its behaviour and run as the 
 
 `tools/bench.mjs` interleaves runs of `main.ts`, the kit's marked baseline and `node -e 0` on the practice
 set and compares process CPU (all threads) net of the empty run. On the development machine (Windows,
-Node 24, noisy) the latest run gave about **2.1x** less CPU than marked (net 1047 ms against 2171 ms; about
-1.8x on wall time). Node 22.12 behaves the same way. Absolute numbers on the grader's one-CPU container
+Node 24, noisy; runs vary by a few percent) the latest run gave **2.03x** less CPU than marked (net 1001 ms
+against 2032 ms; 1.85x on wall time). Node 22.12 behaves the same way. Absolute numbers on the grader's one-CPU container
 differ; the ratio is what the tools report.
 
 ## Correctness
