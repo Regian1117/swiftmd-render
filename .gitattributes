@@ -1,1 +1,7 @@
+# keep LF line endings on every platform: sources, docs and data are compared byte for byte
 * text=auto eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.md text eol=lf

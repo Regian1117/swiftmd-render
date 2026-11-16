@@ -10,10 +10,6 @@
 
 const C_SP = 32, C_TAB = 9, C_NL = 10;
 
-// bounds-checked char code: an out-of-range charCodeAt would deoptimize the hot loops. Past either end
-// it gives 0x10000, which matches no class and compares unequal to every character.
-function at(s, i) { return s.charCodeAt(i); }
-
 // Bit flags for ASCII characters.
 const F_ALNUM = 1, F_EMAIL = 2, F_STOP = 4, F_PUNCT = 8, F_URL1 = 16;
 const CT = new Uint8Array(128);
@@ -81,7 +77,6 @@ const R_PUNCT_CLASS = /[\p{P}\p{S}]/u;
 const R_ANY_PUNCT = /\\([\p{P}\p{S}])/gu;
 const R_PUNCTUATION = /^((?![*_])[\s\p{P}\p{S}])/u;
 const R_ALNUM_U = /[\p{L}\p{N}]/u;
-const R_EM_L = /(?:\*+(?:((?!\*)(?!~)[\p{P}\p{S}])|([^\s*]))?)|_+(?:((?!_)(?!~)[\p{P}\p{S}])|([^\s_]))?/uy;
 const R_EM_R_AST = build('^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)', 'gu', [
   /notPunctSpace/g, /(?:[^\s\p{P}\p{S}]|~)/, /punctSpace/g, /(?!~)[\s\p{P}\p{S}]/, /punct/g, /(?!~)[\p{P}\p{S}]/,
 ]);
@@ -117,7 +112,7 @@ const R_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;
 const R_NUMREF = /&#(?:(\d{1,7})|[Xx]([A-Fa-f0-9]{1,6}));/;
 const R_NUMREF_OR_AMP = /&#(?:(\d{1,7})|[Xx]([A-Fa-f0-9]{1,6}));|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g;
 
-export const RULES = { R_HTML, R_DEF, R_TABLE, R_LHEADING, R_EM_R_AST, R_EM_R_UND, R_DEL_R, R_LINK, R_REFLINK, R_NOLINK, R_REF_SEARCH, R_BLOCK_SKIP, R_PUNCT_OUTSIDE_CODE, R_URL, R_TAG, R_AUTOLINK };
+export const RULES = { R_BACKPEDAL, R_HTML, R_DEF, R_TABLE, R_LHEADING, R_EM_R_AST, R_EM_R_UND, R_DEL_R, R_LINK, R_REFLINK, R_NOLINK, R_REF_SEARCH, R_BLOCK_SKIP, R_PUNCT_OUTSIDE_CODE, R_URL, R_TAG, R_AUTOLINK };
 
 // ---------------------------------------------------------------------------------------------------
 // Escaping
@@ -1574,20 +1569,6 @@ function protoAt(s, q) {
 function emailProtoAt(s, q) {
   return s.startsWith('mailto:', q) || s.startsWith('xmpp:', q);
 }
-// (?= {2,}\n)
-function spaces2nl(s, q) {
-  let k = q;
-  while (s.charCodeAt(k) === C_SP) k++;
-  return k - q >= 2 && s.charCodeAt(k) === C_NL;
-}
-// (?=[emailchars]+@)
-function emailAhead(s, q) {
-  const n = s.length;
-  let j = q;
-  while (j < n) { const d = s.charCodeAt(j); if (d < 128 && (CT[d] & F_EMAIL)) j++; else break; }
-  return j > q && s.charCodeAt(j) === 64;
-}
-
 // end of the inline text token starting at s
 // Where marked's lazy text rule stops. The stop characters, protocols and www. are found by one native
 // search; the three conditions that hinge on a rarer anchor (an '@' after an email-looking run, two or

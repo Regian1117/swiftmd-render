@@ -1,8 +1,18 @@
+# dependencies and logs
 node_modules/
 *.log
+
+# profiles and benchmark / fuzz output (written outside the repo by the tools, ignored if copied in)
 *.cpuprofile
+isolate-*.txt
 out/
 output/
+bench-out/
+fails/
+scratch/
+*.tgz
+
+# competition inputs and reference outputs never belong in the repository
 practice/
 expected.json
 cases.json

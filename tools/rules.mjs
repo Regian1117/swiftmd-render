@@ -1,7 +1,10 @@
-// Dev check: the regex sources parse.js rebuilds must equal the reference's (marked, vendored in the kit).
+// Rule check: the regex sources parse.js rebuilds must equal the reference's (marked, in the kit).
+// Usage: node tools/rules.mjs [kitDir]
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { RULES } from '../parse.js';
-const kit = process.argv[2] ?? new URL('../../kitx/markdown-render-speed-02-kit/', import.meta.url).href;
-const { Lexer } = await import(new URL('baselines/vendor/marked/marked.esm.js', kit.endsWith('/') ? kit : kit + '/').href);
+const kit = new URL(process.argv[2] ? pathToFileURL(resolve(process.argv[2])).href + '/' : '../../kitx/markdown-render-speed-02-kit/', import.meta.url);
+const { Lexer } = await import(new URL('baselines/vendor/marked/marked.esm.js', kit).href);
 const { block, inline } = Lexer.rules;
 const strip = (s) => s.replace(/(^|[^\[])\^/g, '$1');
 const pairs = [
@@ -9,7 +12,7 @@ const pairs = [
   ['R_EM_R_AST', inline.gfm.emStrongRDelimAst, true], ['R_EM_R_UND', inline.gfm.emStrongRDelimUnd, true], ['R_DEL_R', inline.gfm.delRDelim, true],
   ['R_LINK', inline.gfm.link], ['R_REFLINK', inline.gfm.reflink], ['R_NOLINK', inline.gfm.nolink], ['R_REF_SEARCH', inline.gfm.reflinkSearch, true],
   ['R_BLOCK_SKIP', inline.gfm.blockSkip, true], ['R_PUNCT_OUTSIDE_CODE', inline.gfm.anyPunctuationOutsideCode, true], ['R_URL', inline.gfm.url],
-  ['R_TAG', inline.gfm.tag], ['R_AUTOLINK', inline.gfm.autolink],
+  ['R_TAG', inline.gfm.tag], ['R_BACKPEDAL', inline.gfm._backpedal, true], ['R_AUTOLINK', inline.gfm.autolink],
 ];
 let bad = 0;
 for (const [k, ref, exact] of pairs) {

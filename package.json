@@ -1,3 +1,16 @@
 {
-  "type": "module"
+  "name": "swiftmd-render",
+  "version": "1.0.0",
+  "description": "Dependency-free Markdown to HTML renderer whose output is byte-identical to marked 18.1.3 (default options), built for speed",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "parse.js",
+  "scripts": {
+    "start": "node main.ts",
+    "test": "node tools/test.mjs && node tools/rules.mjs",
+    "fuzz": "node tools/fuzz.mjs 200 3000",
+    "fuzz:inline": "node tools/fuzz-inline.mjs 200000",
+    "bench": "node tools/bench.mjs 11"
+  }
 }

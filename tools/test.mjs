@@ -1,12 +1,13 @@
 // Practice-set check: renders every case with ../parse.js and compares with the reference HTML
-// code unit for code unit. Usage: node tools/test.mjs [kitDir]
+// code unit for code unit; prints the first differences. Usage: node tools/test.mjs [-v] [kitDir]
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from '../parse.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const kit = process.argv[2] ?? join(here, '..', '..', 'kitx', 'markdown-render-speed-02-kit');
+const args = process.argv.slice(2).filter((a) => a !== '-v');
+const kit = args[0] ?? join(here, '..', '..', 'kitx', 'markdown-render-speed-02-kit');
 const cases = JSON.parse(readFileSync(join(kit, 'practice', 'input', 'cases.json'), 'utf8'));
 const expected = JSON.parse(readFileSync(join(kit, 'practice', 'reference', 'expected.json'), 'utf8')).cases;
 let pass = 0;
