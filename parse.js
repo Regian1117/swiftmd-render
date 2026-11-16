@@ -122,84 +122,15 @@ export const RULES = { R_HTML, R_DEF, R_TABLE, R_LHEADING, R_EM_R_AST, R_EM_R_UN
 // ---------------------------------------------------------------------------------------------------
 // Escaping
 
-const R_ESC_TEST = /[&<>"']/;
-function escAll(s) {
-  if (!R_ESC_TEST.test(s)) return s;
-  let out = '', last = 0;
-  const n = s.length;
-  for (let i = 0; i < n; i++) {
-    const c = s.charCodeAt(i);
-    let r;
-    if (c === 38) r = '&amp;';
-    else if (c === 60) r = '&lt;';
-    else if (c === 62) r = '&gt;';
-    else if (c === 34) r = '&quot;';
-    else if (c === 39) r = '&#39;';
-    else continue;
-    out += s.slice(last, i) + r;
-    last = i + 1;
-  }
-  return last === 0 ? s : out + s.slice(last);
+const R_ESC_ALL = /[&<>"']/g;
+const R_ESC_NE = /[<>"']|&(?!(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g;
+function escRepl(c) {
+  return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
 }
+function escAll(s) { return s.replace(R_ESC_ALL, escRepl); }
 
-// & followed by an entity-like reference: #\d{1,7}; | #[xX][hex]{1,6}; | \w+;
-function entityAt(s, i) {
-  const n = s.length;
-  let j = i + 1;
-  if (j >= n) return false;
-  let c = s.charCodeAt(j);
-  if (c === 35) {
-    j++;
-    c = s.charCodeAt(j);
-    if (c === 120 || c === 88) {
-      j++;
-      const st = j;
-      while (j < n && j - st < 7) {
-        c = s.charCodeAt(j);
-        if ((c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)) j++;
-        else break;
-      }
-      const k = j - st;
-      if (k >= 1 && k <= 6 && s.charCodeAt(j) === 59) return true;
-      // fall through: "#x..." might still be... no \w+ alternative starts with '#'
-      return false;
-    }
-    const st = j;
-    while (j < n && j - st < 8) {
-      c = s.charCodeAt(j);
-      if (c >= 48 && c <= 57) j++;
-      else break;
-    }
-    const k = j - st;
-    return k >= 1 && k <= 7 && s.charCodeAt(j) === 59;
-  }
-  const st = j;
-  while (j < n) {
-    c = s.charCodeAt(j);
-    if (c < 128 && ((CT[c] & F_ALNUM) || c === 95)) j++;
-    else break;
-  }
-  return j > st && s.charCodeAt(j) === 59;
-}
-
-function esc(s) {
-  if (!R_ESC_TEST.test(s)) return s;
-  let out = '', last = 0;
-  const n = s.length;
-  for (let i = 0; i < n; i++) {
-    const c = s.charCodeAt(i);
-    let r;
-    if (c === 38) { if (entityAt(s, i)) continue; r = '&amp;'; }
-    else if (c === 60) r = '&lt;';
-    else if (c === 62) r = '&gt;';
-    else if (c === 34) r = '&quot;';
-    else if (c === 39) r = '&#39;';
-    else continue;
-    out += s.slice(last, i) + r;
-    last = i + 1;
-  }
-  return last === 0 ? s : out + s.slice(last);
-}
+// text escape: an ampersand that already starts an entity-like reference is left alone
+function esc(s) { return s.replace(R_ESC_NE, escRepl); }
 
 function decodeNumRefs(s) {
   if (s.indexOf('&#') < 0 || !R_NUMREF.test(s)) return s;
