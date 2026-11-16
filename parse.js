@@ -10,6 +10,10 @@
 
 const C_SP = 32, C_TAB = 9, C_NL = 10;
 
+// bounds-checked char code: an out-of-range charCodeAt would deoptimize the hot loops. Past either end
+// it gives 0x10000, which matches no class and compares unequal to every character.
+function at(s, i) { return i >= 0 && i < s.length ? s.charCodeAt(i) : 0x10000; }
+
 // Bit flags for ASCII characters.
 const F_ALNUM = 1, F_EMAIL = 2, F_STOP = 4, F_PUNCT = 8, F_URL1 = 16;
 const CT = new Uint8Array(128);
@@ -18,13 +22,13 @@ const CT = new Uint8Array(128);
   for (let c = 65; c < 91; c++) CT[c] |= F_ALNUM | F_EMAIL | F_URL1;
   for (let c = 97; c < 123; c++) CT[c] |= F_ALNUM | F_EMAIL | F_URL1;
   const email = ".!#$%&'*+/=?_`{|}~-";
-  for (let i = 0; i < email.length; i++) CT[email.charCodeAt(i)] |= F_EMAIL;
+  for (let i = 0; i < email.length; i++) CT[at(email, i)] |= F_EMAIL;
   const stop = '\\<![`*~_';
-  for (let i = 0; i < stop.length; i++) CT[stop.charCodeAt(i)] |= F_STOP;
+  for (let i = 0; i < stop.length; i++) CT[at(stop, i)] |= F_STOP;
   const punct = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
-  for (let i = 0; i < punct.length; i++) CT[punct.charCodeAt(i)] |= F_PUNCT;
+  for (let i = 0; i < punct.length; i++) CT[at(punct, i)] |= F_PUNCT;
   const u1 = '._+-';
-  for (let i = 0; i < u1.length; i++) CT[u1.charCodeAt(i)] |= F_URL1;
+  for (let i = 0; i < u1.length; i++) CT[at(u1, i)] |= F_URL1;
 })();
 
 // JavaScript's \s
@@ -118,7 +122,9 @@ export const RULES = { R_HTML, R_DEF, R_TABLE, R_LHEADING, R_EM_R_AST, R_EM_R_UN
 // ---------------------------------------------------------------------------------------------------
 // Escaping
 
+const R_ESC_TEST = /[&<>"']/;
 function escAll(s) {
+  if (!R_ESC_TEST.test(s)) return s;
   let out = '', last = 0;
   const n = s.length;
   for (let i = 0; i < n; i++) {
@@ -141,42 +147,43 @@ function entityAt(s, i) {
   const n = s.length;
   let j = i + 1;
   if (j >= n) return false;
-  let c = s.charCodeAt(j);
+  let c = at(s, j);
   if (c === 35) {
     j++;
-    c = s.charCodeAt(j);
+    c = at(s, j);
     if (c === 120 || c === 88) {
       j++;
       const st = j;
       while (j < n && j - st < 7) {
-        c = s.charCodeAt(j);
+        c = at(s, j);
         if ((c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)) j++;
         else break;
       }
       const k = j - st;
-      if (k >= 1 && k <= 6 && s.charCodeAt(j) === 59) return true;
+      if (k >= 1 && k <= 6 && at(s, j) === 59) return true;
       // fall through: "#x..." might still be... no \w+ alternative starts with '#'
       return false;
     }
     const st = j;
     while (j < n && j - st < 8) {
-      c = s.charCodeAt(j);
+      c = at(s, j);
       if (c >= 48 && c <= 57) j++;
       else break;
     }
     const k = j - st;
-    return k >= 1 && k <= 7 && s.charCodeAt(j) === 59;
+    return k >= 1 && k <= 7 && at(s, j) === 59;
   }
   const st = j;
   while (j < n) {
-    c = s.charCodeAt(j);
+    c = at(s, j);
     if (c < 128 && ((CT[c] & F_ALNUM) || c === 95)) j++;
     else break;
   }
-  return j > st && s.charCodeAt(j) === 59;
+  return j > st && at(s, j) === 59;
 }
 
 function esc(s) {
+  if (!R_ESC_TEST.test(s)) return s;
   let out = '', last = 0;
   const n = s.length;
   for (let i = 0; i < n; i++) {
@@ -204,7 +211,16 @@ function numRefRepl(m, d, h) {
   return v === 0 || v > 1114111 || (v >= 55296 && v <= 57343) ? '\uFFFD' : v === 38 ? '&amp;' : String.fromCodePoint(v);
 }
 
+const URI_SAFE = new Uint8Array(128);
+(function () {
+  const ok = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;,/?:@&=+$-_.!~*'()#%";
+  for (let i = 0; i < ok.length; i++) URI_SAFE[ok.charCodeAt(i)] = 1;
+})();
 function cleanUrl(href) {
+  let i = 0;
+  const n = href.length;
+  while (i < n) { const c = href.charCodeAt(i); if (c < 128 && URI_SAFE[c] === 1) i++; else break; }
+  if (i === n) return href;
   try { return encodeURI(href).replace(/%25/g, '%'); } catch { return null; }
 }
 
@@ -242,12 +258,12 @@ function expandTabs(s, col) {
 }
 function expandLeading(s, col) {
   let i = 0;
-  while (i < s.length) { const c = s.charCodeAt(i); if (c === 32 || c === 9) i++; else break; }
+  while (i < s.length) { const c = at(s, i); if (c === 32 || c === 9) i++; else break; }
   if (i === 0) return s;
   return expandTabs(s.slice(0, i), col) + s.slice(i);
 }
 function firstNonSpace(s) {
-  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) !== 32) return i;
+  for (let i = 0; i < s.length; i++) if (at(s, i) !== 32) return i;
   return -1;
 }
 
@@ -263,13 +279,13 @@ function eol(s, i) {
 function isHrAt(s, i, max) {
   const n = s.length;
   let sp = 0;
-  while (s.charCodeAt(i) === C_SP) { i++; sp++; }
+  while (at(s, i) === C_SP) { i++; sp++; }
   if (sp > max) return false;
-  const ch = s.charCodeAt(i);
+  const ch = at(s, i);
   if (ch !== 45 && ch !== 95 && ch !== 42) return false;
   let cnt = 0;
   for (; i < n; i++) {
-    const c = s.charCodeAt(i);
+    const c = at(s, i);
     if (c === ch) cnt++;
     else if (c === C_SP || c === C_TAB) continue;
     else if (c === C_NL) break;
@@ -280,13 +296,13 @@ function isHrAt(s, i, max) {
 
 // html block start (paragraph-interrupt flavour: case-sensitive, `$` = end of s)
 function htmlBeginAt(s, i) {
-  if (s.charCodeAt(i) !== 60) return false;
+  if (at(s, i) !== 60) return false;
   const n = s.length;
   let j = i + 1;
-  let c = s.charCodeAt(j);
+  let c = at(s, j);
   if (c === 63) return true; // <?
   if (c === 33) { // <!
-    const d = s.charCodeAt(j + 1);
+    const d = at(s, j + 1);
     if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122)) return true;
     if (s.startsWith('--', j + 1)) return true;
     if (s.startsWith('[CDATA[', j + 1)) return true;
@@ -297,16 +313,16 @@ function htmlBeginAt(s, i) {
       if (s.startsWith(t, j)) {
         const k = j + t.length;
         if (k >= n) return true;
-        const e = s.charCodeAt(k);
+        const e = at(s, k);
         if (e === 62 || isWS(e)) return true;
       }
     }
   } else j++;
   const st = j;
-  while (j < n) { c = s.charCodeAt(j); if ((c >= 97 && c <= 122) || (c >= 48 && c <= 57)) j++; else break; }
+  while (j < n) { c = at(s, j); if ((c >= 97 && c <= 122) || (c >= 48 && c <= 57)) j++; else break; }
   if (j === st || !TAGSET.has(s.slice(st, j))) return false;
-  c = s.charCodeAt(j);
-  return c === C_SP || c === C_NL || c === 62 || (c === 47 && s.charCodeAt(j + 1) === 62);
+  c = at(s, j);
+  return c === C_SP || c === C_NL || c === 62 || (c === 47 && at(s, j + 1) === 62);
 }
 
 // Delimiter row of a table (lookahead flavour, no [:|] requirement): whole line
@@ -320,9 +336,9 @@ function isDelimRow(s, i) {
 function paraInterrupt(s, i) {
   const n = s.length;
   let j = i;
-  while (s.charCodeAt(j) === C_SP) j++;
+  while (at(s, j) === C_SP) j++;
   const sp = j - i;
-  const c = s.charCodeAt(j);
+  const c = at(s, j);
   if (sp <= 3) {
     switch (c) {
       case 45: case 42: case 95: // - * _
@@ -333,21 +349,21 @@ function paraInterrupt(s, i) {
         if (listInterrupt(s, j + 1)) return true;
         break;
       case 49: {
-        const d = s.charCodeAt(j + 1);
+        const d = at(s, j + 1);
         if ((d === 46 || d === 41) && listInterrupt(s, j + 2)) return true;
         break;
       }
       case 35: { // #
         let k = j;
-        while (s.charCodeAt(k) === 35) k++;
-        if (k - j <= 6 && (k >= n || isWS(s.charCodeAt(k)))) return true;
+        while (at(s, k) === 35) k++;
+        if (k - j <= 6 && (k >= n || isWS(at(s, k)))) return true;
         // more than 6 hashes: #{1,6} then \s fails
         break;
       }
       case 62: return true;
       case 96: {
         let k = j;
-        while (s.charCodeAt(k) === 96) k++;
+        while (at(s, k) === 96) k++;
         if (k - j >= 3) {
           const e = eol(s, k);
           if (s.indexOf('`', k) < 0 || s.indexOf('`', k) >= e) return true;
@@ -355,7 +371,7 @@ function paraInterrupt(s, i) {
         break;
       }
       case 126:
-        if (s.charCodeAt(j + 1) === 126 && s.charCodeAt(j + 2) === 126) return true;
+        if (at(s, j + 1) === 126 && at(s, j + 2) === 126) return true;
         break;
       case 60:
         if (htmlBeginAt(s, j)) return true;
@@ -366,7 +382,7 @@ function paraInterrupt(s, i) {
   {
     let k = i;
     while (k < n) { const d = s.charCodeAt(k); if (d === C_SP || d === C_TAB) k++; else break; }
-    if (k > i && s.charCodeAt(k) === C_NL) return true;
+    if (k > i && at(s, k) === C_NL) return true;
   }
   // table: ` *([^\n ].*)\n` + delimiter row
   if (c !== C_NL && j < n) {
@@ -378,8 +394,8 @@ function paraInterrupt(s, i) {
 function isDelimRowQuick(s, i) {
   // cheap reject: first non-space char must be | : or -
   let j = i, k = 0;
-  while (s.charCodeAt(j) === C_SP && k < 3) { j++; k++; }
-  const c = s.charCodeAt(j);
+  while (at(s, j) === C_SP && k < 3) { j++; k++; }
+  const c = at(s, j);
   if (c !== 124 && c !== 58 && c !== 45) return false;
   return isDelimRow(s, i);
 }
@@ -390,10 +406,10 @@ function lineDots(s, a, b) {
 }
 // after a list bullet at i: [ \t]+[^ \t\n]
 function listInterrupt(s, i) {
-  let c = s.charCodeAt(i);
+  let c = at(s, i);
   if (c !== C_SP && c !== C_TAB) return false;
   i++;
-  while ((c = s.charCodeAt(i)) === C_SP || c === C_TAB) i++;
+  while ((c = at(s, i)) === C_SP || c === C_TAB) i++;
   return i < s.length && c !== C_NL;
 }
 
@@ -401,9 +417,9 @@ function listInterrupt(s, i) {
 function bqInterrupt(s, i) {
   const n = s.length;
   let j = i;
-  while (s.charCodeAt(j) === C_SP) j++;
+  while (at(s, j) === C_SP) j++;
   const sp = j - i;
-  const c = s.charCodeAt(j);
+  const c = at(s, j);
   if (sp <= 3) {
     switch (c) {
       case 45: case 42: case 95:
@@ -415,14 +431,14 @@ function bqInterrupt(s, i) {
         break;
       case 35: {
         let k = j;
-        while (s.charCodeAt(k) === 35) k++;
-        if (k - j <= 6 && (k >= n || isWS(s.charCodeAt(k)))) return true;
+        while (at(s, k) === 35) k++;
+        if (k - j <= 6 && (k >= n || isWS(at(s, k)))) return true;
         break;
       }
       case 62: return true;
       case 96: {
         let k = j;
-        while (s.charCodeAt(k) === 96) k++;
+        while (at(s, k) === 96) k++;
         if (k - j >= 3) {
           const e = eol(s, k);
           const b = s.indexOf('`', k);
@@ -431,7 +447,7 @@ function bqInterrupt(s, i) {
         break;
       }
       case 126:
-        if (s.charCodeAt(j + 1) === 126 && s.charCodeAt(j + 2) === 126) return true;
+        if (at(s, j + 1) === 126 && at(s, j + 2) === 126) return true;
         break;
       case 60:
         if (htmlBeginAt(s, j)) return true;
@@ -439,9 +455,9 @@ function bqInterrupt(s, i) {
       default:
         if (c >= 48 && c <= 57) {
           let k = j;
-          while (k < n && k - j < 10) { const d = s.charCodeAt(k); if (d >= 48 && d <= 57) k++; else break; }
+          while (k < n && k - j < 10) { const d = at(s, k); if (d >= 48 && d <= 57) k++; else break; }
           if (k - j <= 9) {
-            const d = s.charCodeAt(k);
+            const d = at(s, k);
             if ((d === 46 || d === 41) && bulletEnd(s, k + 1)) return true;
           }
         }
@@ -449,13 +465,13 @@ function bqInterrupt(s, i) {
   }
   let k = i;
   while (k < n) { const d = s.charCodeAt(k); if (d === C_SP || d === C_TAB) k++; else break; }
-  if (k > i && s.charCodeAt(k) === C_NL) return true;
+  if (k > i && at(s, k) === C_NL) return true;
   return false;
 }
 // (?:[ \t]|\n|$)
 function bulletEnd(s, i) {
   if (i >= s.length) return true;
-  const c = s.charCodeAt(i);
+  const c = at(s, i);
   return c === C_SP || c === C_TAB || c === C_NL;
 }
 
@@ -487,7 +503,7 @@ function blockTokens(src, toks, clipped) {
   const n = src.length;
   let pos = 0;
   while (pos < n) {
-    const c0 = src.charCodeAt(pos);
+    const c0 = at(src, pos);
     // space
     if (c0 === C_NL || c0 === C_SP || c0 === C_TAB) {
       let q = pos;
@@ -495,7 +511,7 @@ function blockTokens(src, toks, clipped) {
         let r = q;
         while (r < n) { const d = src.charCodeAt(r); if (d === C_SP || d === C_TAB) r++; else break; }
         if (r >= n) { q = r; break; }
-        if (src.charCodeAt(r) === C_NL) { q = r + 1; continue; }
+        if (at(src, r) === C_NL) { q = r + 1; continue; }
         break;
       }
       if (q > pos) {
@@ -507,9 +523,9 @@ function blockTokens(src, toks, clipped) {
       }
     }
     let i = pos;
-    while (src.charCodeAt(i) === C_SP) i++;
+    while (at(src, i) === C_SP) i++;
     const sp = i - pos;
-    const c = src.charCodeAt(i);
+    const c = at(src, i);
     // indented code
     if (sp >= 4 || c === C_TAB) {
       const t = codeBlock(src, pos);
@@ -553,9 +569,9 @@ function blockTokens(src, toks, clipped) {
       default:
         if (c >= 48 && c <= 57) {
           let k = i;
-          while (k < n && k - i < 10) { const d = src.charCodeAt(k); if (d >= 48 && d <= 57) k++; else break; }
+          while (k < n && k - i < 10) { const d = at(src, k); if (d >= 48 && d <= 57) k++; else break; }
           if (k - i <= 9) {
-            const d = src.charCodeAt(k);
+            const d = at(src, k);
             if ((d === 46 || d === 41) && bulletEnd(src, k + 1)) t = list(src, pos);
           }
         }
@@ -602,9 +618,9 @@ function codeBlock(src, pos) {
   for (;;) {
     // indented line with content
     let i = q, sp = 0;
-    while (src.charCodeAt(i) === C_SP && sp < 4) { i++; sp++; }
-    if (sp < 4) { if (src.charCodeAt(i) !== C_TAB) break; i++; }
-    if (i >= n || src.charCodeAt(i) === C_NL) break;
+    while (at(src, i) === C_SP && sp < 4) { i++; sp++; }
+    if (sp < 4) { if (at(src, i) !== C_TAB) break; i++; }
+    if (i >= n || at(src, i) === C_NL) break;
     q = eol(src, i);
     if (q >= n) break;
     q++;
@@ -613,7 +629,7 @@ function codeBlock(src, pos) {
       let r = q;
       while (r < n) { const d = src.charCodeAt(r); if (d === C_SP || d === C_TAB) r++; else break; }
       if (r >= n) { q = r; break; }
-      if (src.charCodeAt(r) === C_NL) { q = r + 1; continue; }
+      if (at(src, r) === C_NL) { q = r + 1; continue; }
       break;
     }
     if (q >= n) break;
@@ -627,9 +643,9 @@ function codeBlock(src, pos) {
 
 function fences(src, pos, i) {
   const n = src.length;
-  const ch = src.charCodeAt(i);
+  const ch = at(src, i);
   let k = i;
-  while (src.charCodeAt(k) === ch) k++;
+  while (at(src, k) === ch) k++;
   const flen = k - i;
   if (flen < 3) return null;
   const le = eol(src, k);
@@ -676,22 +692,22 @@ function closeFence(src, i, ch, flen) {
   const n = src.length;
   if (i >= n) return -1;
   let j = i, sp = 0;
-  while (src.charCodeAt(j) === C_SP && sp < 3) { j++; sp++; }
+  while (at(src, j) === C_SP && sp < 3) { j++; sp++; }
   let k = j;
-  while (src.charCodeAt(k) === ch) k++;
+  while (at(src, k) === ch) k++;
   if (k - j < flen) return -1;
-  while (src.charCodeAt(k) === C_SP) k++;
-  if (k < n && src.charCodeAt(k) !== C_NL) return -1;
+  while (at(src, k) === C_SP) k++;
+  if (k < n && at(src, k) !== C_NL) return -1;
   return k;
 }
 
 function heading(src, pos, i) {
   const n = src.length;
   let k = i;
-  while (src.charCodeAt(k) === 35) k++;
+  while (at(src, k) === 35) k++;
   const depth = k - i;
   if (depth > 6) return null;
-  if (k < n && !isWS(src.charCodeAt(k))) return null;
+  if (k < n && !isWS(at(src, k))) return null;
   const e = eol(src, k);
   if (!lineDots(src, k, e)) return null;
   let text = src.slice(k, e).trim();
@@ -718,7 +734,7 @@ function defBlock(src, pos) {
   const m = R_DEF.exec(rest);
   if (m === null) return null;
   const h = m[2];
-  if (h.charCodeAt(0) !== 60 && balance(h) !== -1) return null;
+  if (at(h, 0) !== 60 && balance(h) !== -1) return null;
   const tag = normLabel(m[1]);
   const href = h ? unescapePunct(h.replace(/^<(.*)>$/, '$1')) : '';
   const title = m[3] ? unescapePunct(m[3].substring(1, m[3].length - 1)) : m[3];
@@ -797,12 +813,12 @@ function splitCells(row, count) {
 function underlineAt(src, i) {
   const n = src.length;
   let j = i, sp = 0;
-  while (src.charCodeAt(j) === C_SP && sp < 3) { j++; sp++; }
-  const ch = src.charCodeAt(j);
+  while (at(src, j) === C_SP && sp < 3) { j++; sp++; }
+  const ch = at(src, j);
   if (ch !== 61 && ch !== 45) return false;
-  while (src.charCodeAt(j) === ch) j++;
+  while (at(src, j) === ch) j++;
   while (j < n) { const c = src.charCodeAt(j); if (c === C_SP || c === C_TAB) j++; else break; }
-  return j >= n || src.charCodeAt(j) === C_NL;
+  return j >= n || at(src, j) === C_NL;
 }
 
 function lheading(src, pos) {
@@ -816,7 +832,7 @@ function lheading(src, pos) {
     // blank ([ \t]*) line stops
     let k = ls;
     while (k < n) { const c = src.charCodeAt(k); if (c === C_SP || c === C_TAB) k++; else break; }
-    if (k >= n || src.charCodeAt(k) === C_NL) break;
+    if (k >= n || at(src, k) === C_NL) break;
     if (underlineAt(src, ls)) { found = true; break; }
     ls = eol(src, ls);
   }
@@ -834,7 +850,7 @@ function paragraphEnd(src, pos) {
   let e = eol(src, pos);
   while (e < n) {
     const ls = e + 1;
-    if (ls >= n || src.charCodeAt(ls) === C_NL) break;
+    if (ls >= n || at(src, ls) === C_NL) break;
     if (paraInterrupt(src, ls)) break;
     e = eol(src, ls);
   }
@@ -847,20 +863,20 @@ function bqMatchEnd(src, pos) {
   let q = pos;
   while (q < n) {
     let i = q, sp = 0;
-    while (src.charCodeAt(i) === C_SP && sp < 3) { i++; sp++; }
-    if (src.charCodeAt(i) !== 62) break;
+    while (at(src, i) === C_SP && sp < 3) { i++; sp++; }
+    if (at(src, i) !== 62) break;
     i++;
-    if (src.charCodeAt(i) === C_SP) i++;
+    if (at(src, i) === C_SP) i++;
     // blank rest?
     let k = i;
     while (k < n) { const c = src.charCodeAt(k); if (c === C_SP || c === C_TAB) k++; else break; }
     let e;
-    if (k >= n || src.charCodeAt(k) === C_NL) e = eol(src, i);
+    if (k >= n || at(src, k) === C_NL) e = eol(src, i);
     else {
       e = eol(src, i);
       while (e < n) {
         const ls = e + 1;
-        if (ls >= n || src.charCodeAt(ls) === C_NL) break;
+        if (ls >= n || at(src, ls) === C_NL) break;
         if (bqInterrupt(src, ls)) break;
         e = eol(src, ls);
       }
@@ -938,7 +954,7 @@ function blockquote(src, pos) {
 // line-string predicates with indent limit n (0..3)
 function lead(s, n) {
   let i = 0;
-  while (i <= n && s.charCodeAt(i) === C_SP) i++;
+  while (i <= n && at(s, i) === C_SP) i++;
   return i > n ? -1 : i; // index of first non-space, or -1 if more than n spaces
 }
 function fencesBeginL(s, n) {
@@ -948,81 +964,89 @@ function fencesBeginL(s, n) {
 }
 function headingBeginL(s, n) {
   const i = lead(s, n);
-  if (i < 0 || s.charCodeAt(i) !== 35) return false;
+  if (i < 0 || at(s, i) !== 35) return false;
   let k = i;
-  while (s.charCodeAt(k) === 35) k++;
-  return k - i <= 6 && (k >= s.length || isWS(s.charCodeAt(k)));
+  while (at(s, k) === 35) k++;
+  return k - i <= 6 && (k >= s.length || isWS(at(s, k)));
 }
 const R_HTML_BEGIN_L = new RegExp('^(?:</?(?:' + TAGS + ')(?: +|$|/?>)|<(?:(?:script|pre|style|textarea)(?:[\\s>]|$)|!--)|<\\?|<![A-Za-z]|<!\\[CDATA\\[)', 'i');
 function htmlBeginL(s, n) {
   const i = lead(s, n);
-  if (i < 0 || s.charCodeAt(i) !== 60) return false;
+  if (i < 0 || at(s, i) !== 60) return false;
   return R_HTML_BEGIN_L.test(i === 0 ? s : s.slice(i));
 }
 function bqBeginL(s, n) {
   const i = lead(s, n);
-  return i >= 0 && s.charCodeAt(i) === 62;
+  return i >= 0 && at(s, i) === 62;
 }
 function bulletBeginL(s, n) {
   const i = lead(s, n);
   if (i < 0) return false;
-  const c = s.charCodeAt(i);
+  const c = at(s, i);
   let k;
   if (c === 42 || c === 43 || c === 45) k = i + 1;
   else if (c >= 48 && c <= 57) {
     k = i;
-    while (k < s.length && k - i < 10) { const d = s.charCodeAt(k); if (d >= 48 && d <= 57) k++; else break; }
+    while (k < s.length && k - i < 10) { const d = at(s, k); if (d >= 48 && d <= 57) k++; else break; }
     if (k - i > 9) return false;
-    const d = s.charCodeAt(k);
+    const d = at(s, k);
     if (d !== 46 && d !== 41) return false;
     k++;
   } else return false;
   if (k >= s.length) return true;
-  const d = s.charCodeAt(k);
+  const d = at(s, k);
   return d === C_SP || d === C_TAB;
 }
 function hrL(s, n) {
   return isHrAt(s, 0, n);
 }
 
-const R_DOUBLE_BLANK = /\n[ \t]*\n[ \t]*$/;
+// /\n[ \t]*\n[ \t]*$/
+function endsDoubleBlank(a) {
+  let i = a.length - 1;
+  while (i >= 0) { const c = a.charCodeAt(i); if (c === C_SP || c === C_TAB) i--; else break; }
+  if (i < 0 || a.charCodeAt(i) !== C_NL) return false;
+  i--;
+  while (i >= 0) { const c = a.charCodeAt(i); if (c === C_SP || c === C_TAB) i--; else break; }
+  return i >= 0 && a.charCodeAt(i) === C_NL;
+}
 const R_TASK = /^\[[ xX]\][ \t]+\S/;
 const R_TASK_REPL = /^\[[ xX]\][ \t]+/;
 
 function list(src, pos) {
   const n = src.length;
   let i = pos;
-  while (src.charCodeAt(i) === C_SP) i++;
-  const c = src.charCodeAt(i);
+  while (at(src, i) === C_SP) i++;
+  const c = at(src, i);
   let be;
   if (c === 42 || c === 43 || c === 45) be = i + 1;
   else {
     be = i;
-    while (be < n && be - i < 10) { const d = src.charCodeAt(be); if (d >= 48 && d <= 57) be++; else break; }
+    while (be < n && be - i < 10) { const d = at(src, be); if (d >= 48 && d <= 57) be++; else break; }
     be++;
   }
   const bull = src.slice(i, be);
   const ordered = bull.length > 1;
-  const delim = bull.charCodeAt(bull.length - 1);
+  const delim = at(bull, bull.length - 1);
   const items = [];
   let loose = false, endsWithBlank = false;
   let e = pos;
   while (e < n) {
     // item regex: ^( {0,3}BULL)((?:[\t ][^\n]*)?(?:\n|$))
     let j = e, sp = 0;
-    while (src.charCodeAt(j) === C_SP && sp < 3) { j++; sp++; }
-    const d0 = src.charCodeAt(j);
+    while (at(src, j) === C_SP && sp < 3) { j++; sp++; }
+    const d0 = at(src, j);
     let k;
     if (ordered) {
       k = j;
-      while (k < n && k - j < 10) { const d = src.charCodeAt(k); if (d >= 48 && d <= 57) k++; else break; }
-      if (k === j || k - j > 9 || src.charCodeAt(k) !== delim) break;
+      while (k < n && k - j < 10) { const d = at(src, k); if (d >= 48 && d <= 57) k++; else break; }
+      if (k === j || k - j > 9 || at(src, k) !== delim) break;
       k++;
     } else {
       if (d0 !== delim) break;
       k = j + 1;
     }
-    if (k < n) { const d = src.charCodeAt(k); if (d !== C_SP && d !== C_TAB && d !== C_NL) break; }
+    if (k < n) { const d = at(src, k); if (d !== C_SP && d !== C_TAB && d !== C_NL) break; }
     if (isHrAt(src, e, 3)) break;
     const itemStart = e;
     const b = k - e;
@@ -1067,7 +1091,7 @@ function list(src, pos) {
     const A = src.slice(itemStart, e);
     if (!loose) {
       if (endsWithBlank) loose = true;
-      else if (R_DOUBLE_BLANK.test(A)) endsWithBlank = true;
+      else if (endsDoubleBlank(A)) endsWithBlank = true;
     }
     items.push({ raw: A, task: R_TASK.test(contents), text: contents, tokens: null, checked: false });
   }
@@ -1183,31 +1207,36 @@ function checkbox(checked) {
 function Mask(src) {
   this.src = src;
   this.masked = null;
-  this.ast = -1; this.und = -1; this.del = -1;
+  this.ast = -2; this.und = -2; this.del = -2;
 }
 
 function computeMask(m) {
-  const e = m.src;
-  let t = e;
-  if (t.indexOf('[') >= 0) t = t.replace(R_REF_SEARCH, refMaskRepl);
-  t = t.replace(R_PUNCT_OUTSIDE_CODE, (n, s, r) => r ? '+'.repeat(n.length) : s ? s + n.slice(s.length, -s.length).replace(/`/g, '+') + s : n);
-  t = t.replace(R_BLOCK_SKIP, (n) => '[' + 'a'.repeat(n.length - 2) + ']');
+  let t = m.src;
+  const hasBr = t.indexOf('[') >= 0, hasTick = t.indexOf('`') >= 0;
+  if (hasBr) t = t.replace(R_REF_SEARCH, refMaskRepl);
+  if (hasTick || t.indexOf('\\') >= 0) t = t.replace(R_PUNCT_OUTSIDE_CODE, punctMaskRepl);
+  if (hasBr || hasTick || t.indexOf('<') >= 0) t = t.replace(R_BLOCK_SKIP, skipMaskRepl);
   m.masked = t;
-  // last possible closer indices
-  const len = t.length;
-  let ast = -1, und = -1, del = -1;
-  for (let s = 0; s < len; s++) {
-    const r = t.charCodeAt(s);
-    if (r !== 42 && r !== 95 && r !== 126) continue;
-    const o = s === 0 ? 10 : t.charCodeAt(s - 1);
-    let i = s + 1;
-    while (i < len && t.charCodeAt(i) === r) i++;
-    if (o !== 32 && o !== 9 && o !== 10 && o !== 13 && o !== 12) {
-      if (r === 126) del = s; else if (r === 42) ast = s; else und = s;
-    }
-    s = i - 1;
+}
+function punctMaskRepl(n, s, r) {
+  return r ? '+'.repeat(n.length) : s ? s + n.slice(s.length, -s.length).replace(/`/g, '+') + s : n;
+}
+function skipMaskRepl(n) {
+  return '[' + 'a'.repeat(n.length - 2) + ']';
+}
+// start of the last run of ch whose preceding character is not ASCII whitespace (-1 if none)
+function lastCloser(t, ch) {
+  let i = t.length - 1;
+  while (i >= 0) {
+    i = t.lastIndexOf(ch, i);
+    if (i < 0) return -1;
+    let st = i;
+    while (st > 0 && t[st - 1] === ch) st--;
+    const o = st === 0 ? 10 : at(t, st - 1);
+    if (o !== 32 && o !== 9 && o !== 10 && o !== 13 && o !== 12) return st;
+    i = st - 1;
   }
-  m.ast = ast; m.und = und; m.del = del;
+  return -1;
 }
 function refMaskRepl(r) {
   const o = r.lastIndexOf('[');
@@ -1307,10 +1336,10 @@ function tryLink(src, pos) {
   const t = R_LINK.exec(src);
   if (t === null) return null;
   let t0 = t[0], t2 = t[2], t3 = t[3];
-  const isImage = t0.charCodeAt(0) === 33;
+  const isImage = at(t0, 0) === 33;
   if (labelHasTag(src, pos, t[1], isImage ? 2 : 1)) return null;
   const s = t2.trim();
-  if (s.charCodeAt(0) === 60) {
+  if (at(s, 0) === 60) {
     if (!s.endsWith('>')) return null;
     const l = rtrimChar(s.slice(0, -1), '\\');
     if ((s.length - l.length) % 2 === 0) return null;
@@ -1328,7 +1357,7 @@ function tryLink(src, pos) {
   if ((t0.length - r.length) % 2 === 0) return null;
   let o = t2.trim();
   const title = t3 ? t3.slice(1, -1) : '';
-  if (o.charCodeAt(0) === 60) o = o.slice(1, -1);
+  if (at(o, 0) === 60) o = o.slice(1, -1);
   const html = emitLink(t0, t[1], o && unescapePunct(o), title && unescapePunct(title), isImage);
   if (html === null) return null;
   rLen = t0.length;
@@ -1355,22 +1384,22 @@ function tryRefLink(src, pos) {
 function charBefore(s, l) {
   // last code point of s.slice(max(0,l-2), l)
   if (l <= 0) return '';
-  const a = s.charCodeAt(l - 1);
+  const a = at(s, l - 1);
   if (a >= 0xdc00 && a <= 0xdfff && l >= 2) {
-    const b = s.charCodeAt(l - 2);
+    const b = at(s, l - 2);
     if (b >= 0xd800 && b <= 0xdbff) return s.slice(l - 2, l);
   }
   return s[l - 1];
 }
 function isPunctuation(ch) {
   if (ch === '') return false;
-  const c = ch.charCodeAt(0);
+  const c = at(ch, 0);
   if (c < 128) return c !== 42 && c !== 95 && ((CT[c] & F_PUNCT) !== 0 || isWS(c));
   return R_PUNCTUATION.test(ch);
 }
 function cpLen(s) {
   let n = 0;
-  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 0xd800 || c > 0xdbff || i + 1 >= s.length) n++; else { const d = s.charCodeAt(i + 1); if (d >= 0xdc00 && d <= 0xdfff) { n++; i++; } else n++; } }
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 0xd800 || c > 0xdbff || i + 1 >= s.length) n++; else { const d = at(s, i + 1); if (d >= 0xdc00 && d <= 0xdfff) { n++; i++; } else n++; } }
   return n;
 }
 
@@ -1398,7 +1427,9 @@ function tryEmStrong(src, pos, prev, mk) {
   const y = i - l + k;
   const R = !!p.trim() && (!!d || (r === '*' && !h));
   const A = r === '*' ? R_EM_R_AST : R_EM_R_UND;
-  const v = r === '*' ? mk.ast : mk.und;
+  let v;
+  if (r === '*') { if (mk.ast === -2) mk.ast = lastCloser(t, '*'); v = mk.ast; }
+  else { if (mk.und === -2) mk.und = lastCloser(t, '_'); v = mk.und; }
   const Q = pos + k;
   if (v < Q) return null;
   const ts = t.slice(Q);
@@ -1440,6 +1471,7 @@ function tryDel(src, pos, prev, mk) {
   let p = o;
   if (mk.masked === null) computeMask(mk);
   const t = mk.masked;
+  if (mk.del === -2) mk.del = lastCloser(t, '~');
   const u = mk.del;
   const d = pos + o;
   if (u < d) return null;
@@ -1490,18 +1522,18 @@ function urlPossible(src, pos, c) {
   if (protoAt(src, pos)) return true;
   let j = pos;
   while (j < n) { const d = src.charCodeAt(j); if (d < 128 && (CT[d] & F_URL1)) j++; else break; }
-  return j > pos && src.charCodeAt(j) === 64;
+  return j > pos && at(src, j) === 64;
 }
 function protoAt(s, q) {
-  const c = s.charCodeAt(q) | 32;
+  const c = at(s, q) | 32;
   if (c === 104) {
-    if ((s.charCodeAt(q + 1) | 32) !== 116 || (s.charCodeAt(q + 2) | 32) !== 116 || (s.charCodeAt(q + 3) | 32) !== 112) return false;
+    if ((at(s, q + 1) | 32) !== 116 || (at(s, q + 2) | 32) !== 116 || (at(s, q + 3) | 32) !== 112) return false;
     let k = q + 4;
-    if ((s.charCodeAt(k) | 32) === 115) k++;
-    return s.charCodeAt(k) === 58 && s.charCodeAt(k + 1) === 47 && s.charCodeAt(k + 2) === 47;
+    if ((at(s, k) | 32) === 115) k++;
+    return at(s, k) === 58 && at(s, k + 1) === 47 && at(s, k + 2) === 47;
   }
   if (c === 102) {
-    return (s.charCodeAt(q + 1) | 32) === 116 && (s.charCodeAt(q + 2) | 32) === 112 && s.charCodeAt(q + 3) === 58 && s.charCodeAt(q + 4) === 47 && s.charCodeAt(q + 5) === 47;
+    return (at(s, q + 1) | 32) === 116 && (at(s, q + 2) | 32) === 112 && at(s, q + 3) === 58 && at(s, q + 4) === 47 && at(s, q + 5) === 47;
   }
   return false;
 }
@@ -1511,51 +1543,91 @@ function emailProtoAt(s, q) {
 // (?= {2,}\n)
 function spaces2nl(s, q) {
   let k = q;
-  while (s.charCodeAt(k) === C_SP) k++;
-  return k - q >= 2 && s.charCodeAt(k) === C_NL;
+  while (at(s, k) === C_SP) k++;
+  return k - q >= 2 && at(s, k) === C_NL;
 }
 // (?=[emailchars]+@)
 function emailAhead(s, q) {
   const n = s.length;
   let j = q;
   while (j < n) { const d = s.charCodeAt(j); if (d < 128 && (CT[d] & F_EMAIL)) j++; else break; }
-  return j > q && s.charCodeAt(j) === 64;
+  return j > q && at(s, j) === 64;
 }
 
 // end of the inline text token starting at s
-function textEnd(src, s) {
+// Where marked's lazy text rule stops. The stop characters, protocols and www. are found by one native
+// search; the three conditions that hinge on a rarer anchor (an '@' after an email-looking run, two or
+// more spaces before a line break, mailto:/xmpp:) are located with indexOf and cached per source:
+// each cached occurrence stays the first relevant one until the scan position passes it.
+const R_TEXT_STOP = /[\\<!\[`*~_]|[hH][tT][tT][pP][sS]?:\/\/|[fF][tT][pP]:\/\/|(?<![^\s*_~(])www\./g;
+
+function TextScan(src) {
+  this.src = src;
+  this.atA = -2; this.atR = 0; // next '@' (A) with a non-empty email run [R, A) before it; -1 none
+  this.brK = -2; this.brS = 0; // next "  \n": newline at K, its space run starts at S; -1 none
+  this.mt = -2;                // next mailto:/xmpp: after a non-alphanumeric; -1 none
+}
+
+function isEmailC(c) { return c < 128 && (CT[c] & F_EMAIL) !== 0; }
+
+// end of the inline text token starting at s
+function textEnd(sc, s) {
+  const src = sc.src;
   const n = src.length;
   const c0 = src.charCodeAt(s);
   if (!(c0 < 128 && (CT[c0] & F_ALNUM)) && emailProtoAt(src, s + 1)) return s + 1;
   let q = s + 1;
-  if (c0 === 96 || c0 === 126) while (src.charCodeAt(q) === c0) q++;
+  if (c0 === 96 || c0 === 126) while (q < n && src.charCodeAt(q) === c0) q++;
   if (q >= n) return n;
-  {
-    const cq = src.charCodeAt(q);
-    if (cq === 96 || cq === 126) return q;
-    if (cq === C_SP && spaces2nl(src, q)) return q;
-    if (cq < 128 && (CT[cq] & F_EMAIL) && emailAhead(src, q)) return q;
-  }
-  for (; q < n; q++) {
-    const cq = src.charCodeAt(q);
-    if (cq < 128) {
-      const f = CT[cq];
-      if (f & F_STOP) return q;
-      if ((cq | 32) === 104 || (cq | 32) === 102) { if (protoAt(src, q)) return q; }
-      else if (cq === 119 && src.startsWith('www.', q)) {
-        const b = src.charCodeAt(q - 1);
-        if (isWS(b) || b === 42 || b === 95 || b === 126 || b === 40) return q;
-      }
-      if (cq !== C_SP && src.charCodeAt(q + 1) === C_SP && spaces2nl(src, q + 1)) return q + 1;
-      if (!(f & F_ALNUM) && (src.charCodeAt(q + 1) === 109 || src.charCodeAt(q + 1) === 120) && emailProtoAt(src, q + 1)) return q + 1;
-      if (!(f & F_EMAIL) && emailAhead(src, q + 1)) return q + 1;
-    } else {
-      if (src.charCodeAt(q + 1) === C_SP && spaces2nl(src, q + 1)) return q + 1;
-      if ((src.charCodeAt(q + 1) === 109 || src.charCodeAt(q + 1) === 120) && emailProtoAt(src, q + 1)) return q + 1;
-      if (emailAhead(src, q + 1)) return q + 1;
+  const cq = src.charCodeAt(q);
+  if (cq === 96 || cq === 126) return q;
+  let end = n;
+  if (sc.brK !== -1) {
+    if (sc.brK === -2 || sc.brK - 2 < q) {
+      const i = src.indexOf('  \n', q);
+      if (i < 0) sc.brK = -1;
+      else { let S = i; while (S > 0 && src.charCodeAt(S - 1) === C_SP) S--; sc.brK = i + 2; sc.brS = S; }
+    }
+    if (sc.brK !== -1) {
+      if (sc.brS <= q) return q; // (?= {2,}\n) right here
+      end = sc.brS;
     }
   }
-  return n;
+  if (sc.atA !== -1) {
+    if (sc.atA === -2 || sc.atA < q + 1) {
+      let i = src.indexOf('@', q + 1), R = 0;
+      while (i >= 0) {
+        R = i;
+        while (R > 0 && isEmailC(src.charCodeAt(R - 1))) R--;
+        if (R < i) break;
+        i = src.indexOf('@', i + 1);
+      }
+      if (i < 0) sc.atA = -1; else { sc.atA = i; sc.atR = R; }
+    }
+    if (sc.atA !== -1) {
+      if (sc.atR <= q) return q; // q is inside the run: (?=[...]+@) right here
+      if (sc.atR < end) end = sc.atR;
+    }
+  }
+  if (sc.mt !== -1) {
+    if (sc.mt === -2 || sc.mt < q + 1) {
+      let from = q + 1, m = -1;
+      for (;;) {
+        const i1 = src.indexOf('mailto:', from), i2 = src.indexOf('xmpp:', from);
+        const i = i1 < 0 ? i2 : i2 < 0 ? i1 : Math.min(i1, i2);
+        if (i < 0) break;
+        const d = src.charCodeAt(i - 1);
+        if (!(d < 128 && (CT[d] & F_ALNUM))) { m = i; break; }
+        from = i + 1;
+      }
+      sc.mt = m;
+    }
+    if (sc.mt !== -1 && sc.mt < end) end = sc.mt;
+  }
+  R_TEXT_STOP.lastIndex = q;
+  const m = R_TEXT_STOP.exec(src);
+  if (m !== null && m.index < end) end = m.index;
+  return end;
 }
 
 const ESC_HTML = { 38: '&amp;', 60: '&lt;', 62: '&gt;', 34: '&quot;', 39: '&#39;' };
@@ -1565,16 +1637,16 @@ function lexInline(src) {
   let out = '';
   let pend = '', pendEsc = false, hasPend = false;
   let prevText = false, prev = '';
-  let mk = null;
+  let mk = null, sc = null;
   let pos = 0;
   while (pos < n) {
     if (!prevText) prev = '';
     prevText = false;
-    const c = src.charCodeAt(pos);
+    const c = at(src, pos);
     let html = null;
     switch (c) {
       case 92: { // backslash
-        const d = src.charCodeAt(pos + 1);
+        const d = at(src, pos + 1);
         if (d < 128 && (CT[d] & F_PUNCT)) {
           if (hasPend) { out += pendEsc || textMode ? pend : esc(pend); hasPend = false; }
           out += textMode ? src[pos + 1] : (ESC_HTML[d] || src[pos + 1]);
@@ -1611,7 +1683,7 @@ function lexInline(src) {
         break;
       }
       case 33: // !
-        if (src.charCodeAt(pos + 1) !== 91) break;
+        if (at(src, pos + 1) !== 91) break;
       // falls through
       case 91: { // [
         if (parenOk) html = tryLink(src, pos);
@@ -1638,7 +1710,7 @@ function lexInline(src) {
         const m = R_CODE.exec(src);
         if (m !== null) {
           let t = m[2].replace(/\n/g, ' ');
-          if (/[^ ]/.test(t) && t.charCodeAt(0) === C_SP && t.charCodeAt(t.length - 1) === C_SP) t = t.substring(1, t.length - 1);
+          if (/[^ ]/.test(t) && at(t, 0) === C_SP && at(t, t.length - 1) === C_SP) t = t.substring(1, t.length - 1);
           html = textMode ? t : '<code>' + escAll(t) + '</code>';
           rLen = m[0].length;
         }
@@ -1646,8 +1718,8 @@ function lexInline(src) {
       }
       case 32: { // br: two or more spaces then newline not followed by only whitespace
         let k = pos;
-        while (src.charCodeAt(k) === C_SP) k++;
-        if (k - pos >= 2 && src.charCodeAt(k) === C_NL && !onlyWsAfter(src, k + 1)) {
+        while (at(src, k) === C_SP) k++;
+        if (k - pos >= 2 && at(src, k) === C_NL && !onlyWsAfter(src, k + 1)) {
           k++;
           while (k < n) { const e = src.charCodeAt(k); if (e === C_SP || e === C_TAB) k++; else break; }
           html = textMode ? '' : '<br>';
@@ -1670,11 +1742,12 @@ function lexInline(src) {
       continue;
     }
     // text
-    const e = textEnd(src, pos);
+    if (sc === null) sc = new TextScan(src);
+    const e = textEnd(sc, pos);
     const raw = src.slice(pos, e);
     const txt = inRaw ? raw : decodeNumRefs(raw);
     if (!hasPend) { pend = txt; pendEsc = inRaw; hasPend = true; } else pend += txt;
-    if (src.charCodeAt(e - 1) !== 95) prev = src[e - 1];
+    if (at(src, e - 1) !== 95) prev = src[e - 1];
     prevText = true;
     pos = e;
   }
@@ -1684,7 +1757,7 @@ function lexInline(src) {
 
 // (?=\s*$) from i
 function onlyWsAfter(s, i) {
-  for (let k = i; k < s.length; k++) if (!isWS(s.charCodeAt(k))) return false;
+  for (let k = i; k < s.length; k++) if (!isWS(at(s, k))) return false;
   return true;
 }
 

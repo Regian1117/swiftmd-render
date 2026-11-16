@@ -7,3 +7,7 @@ const cases = JSON.parse(readFileSync(IN + '/cases.json', 'utf8'));
 const html = new Array(cases.length);
 for (let i = 0; i < cases.length; i++) html[i] = parse(cases[i].markdown);
 writeFileSync(OUT + '/html.json', JSON.stringify(html));
+if (process.env.SWIFTMD_BENCH === '1') {
+  const u = process.cpuUsage();
+  process.stderr.write(`cpu ${((u.user + u.system) / 1000).toFixed(1)}ms\n`);
+}
