@@ -105,7 +105,7 @@ const R_REF_SEARCH = build('reflink|nolink(?!\\()', 'g', [
   'reflink', build('^!?\\[(label)\\]\\[(ref)\\]', '', ['label', /(?:[^\[\]\\`]*(?:\[(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\]))){0,999}?[^\[\]\\`]*?/, 'ref', /(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999}/]),
   'nolink', build('^!?\\[(ref)\\](?:\\[\\])?', '', ['ref', /(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999}/]),
 ]);
-const R_BLOCK_SKIP = /\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!`)()(?<b>`+)[^`]+\k<b>(?!`)|<(?! )[^<>]*?>/g;
+const R_BLOCK_SKIP = /\[(?:[^\[\]`]|(`+)[^`]+\1(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!`)()(`+)[^`]+\3(?!`)|<(?! )[^<>]*?>/g;
 const R_PUNCT_OUTSIDE_CODE = /(`+)(?:[^`]|[^`][\s\S]*?[^`])\1(?!`)|`+|\\([\p{P}\p{S}])/gu;
 const R_URL = /(?:mailto:[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])|xmpp:[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])(?:\/[A-Za-z0-9@.]+)?)|((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])/y;
 const R_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
@@ -125,7 +125,8 @@ function escRepl(c) {
 function escAll(s) { return s.replace(R_ESC_ALL, escRepl); }
 
 // text escape: an ampersand that already starts an entity-like reference is left alone
-function esc(s) { return s.replace(R_ESC_NE, escRepl); }
+const R_ESC_ANY = /[&<>"']/;
+function esc(s) { return R_ESC_ANY.test(s) ? s.replace(R_ESC_NE, escRepl) : s; }
 
 function decodeNumRefs(s) {
   if (s.indexOf('&#') < 0 || !R_NUMREF.test(s)) return s;
